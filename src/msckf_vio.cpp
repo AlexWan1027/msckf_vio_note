@@ -1197,9 +1197,12 @@ void MsckfVio::measurementUpdate(
 
   // Update the IMU state.
   //更新imu的状态
+  // 取delta_x向量中前21个元素，即imu的状态
   const VectorXd& delta_x_imu = delta_x.head<21>();
 
-  // 
+  // 取delta_x_imu向量中第6个元素后的三个元素（4 5 6）
+  // 取delta_x_imu向量中第12个元素后的三个元素（13 14 15）
+  // 这两个子向量是imu的速度和位置，如果更新矫正的值过大则警告
   if (//delta_x_imu.segment<3>(0).norm() > 0.15 ||
       //delta_x_imu.segment<3>(3).norm() > 0.15 ||
       delta_x_imu.segment<3>(6).norm() > 0.5 ||
@@ -1211,7 +1214,12 @@ void MsckfVio::measurementUpdate(
     //return;
   }
 
-  // 
+  // 分别更新Imu的四元数、陀螺仪偏置、速度、加速度偏置和位置
+  // 更新四元数，四元数乘法：
+  // 更新陀螺仪偏置：b_g = b_g + δb_g
+  // 更新imu速度：v = v + δv
+  // 更新加速度偏置：b_a = b_a + δb_a
+  // 更新imu位置：p = p + δp
   const Vector4d dq_imu =
     smallAngleQuaternion(delta_x_imu.head<3>());
   state_server.imu_state.orientation = quaternionMultiplication(
@@ -1221,6 +1229,7 @@ void MsckfVio::measurementUpdate(
   state_server.imu_state.acc_bias += delta_x_imu.segment<3>(9);
   state_server.imu_state.position += delta_x_imu.segment<3>(12);
 
+  // 更新相机与Imu之间的外参数
   const Vector4d dq_extrinsic =
     smallAngleQuaternion(delta_x_imu.segment<3>(15));
   state_server.imu_state.R_imu_cam0 = quaternionToRotation(
@@ -1228,10 +1237,12 @@ void MsckfVio::measurementUpdate(
   state_server.imu_state.t_cam0_imu += delta_x_imu.segment<3>(18);
 
   // Update the camera states.
-  // 更新相机的状态
+  // 更新状态向量x中所有的相机状态
   auto cam_state_iter = state_server.cam_states.begin();
   for (int i = 0; i < state_server.cam_states.size();
       ++i, ++cam_state_iter) {
+    // 更新第i个相机状态
+    // 
     const VectorXd& delta_x_cam = delta_x.segment<6>(21+i*6);
     const Vector4d dq_cam = smallAngleQuaternion(delta_x_cam.head<3>());
     cam_state_iter->second.orientation = quaternionMultiplication(
