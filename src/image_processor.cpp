@@ -40,6 +40,13 @@ ImageProcessor::~ImageProcessor() {
   return;
 }
 
+/**
+ * @brief ROS的参数服务器中读取相关参数
+ *
+ * 配置文件位于/config/
+ * 读取相机模型的类型、相机内参以及相机与imu之间的外参
+ * 读取图像的分辨率（长宽）
+ */
 bool ImageProcessor::loadParameters() {
   // Camera calibration parameters
   nh.param<string>("cam0/distortion_model",
@@ -87,6 +94,8 @@ bool ImageProcessor::loadParameters() {
   cam1_distortion_coeffs[2] = cam1_distortion_coeffs_temp[2];
   cam1_distortion_coeffs[3] = cam1_distortion_coeffs_temp[3];
 
+  // getTransformCV的作用是讲kalibr标定结果的格式转换为opencv格式
+  // 得到imu、cam0和cam1之间的外参数
   cv::Mat     T_imu_cam0 = utils::getTransformCV(nh, "cam0/T_cam_imu");
   cv::Matx33d R_imu_cam0(T_imu_cam0(cv::Rect(0,0,3,3)));
   cv::Vec3d   t_imu_cam0 = T_imu_cam0(cv::Rect(3,0,1,3));
@@ -174,6 +183,32 @@ bool ImageProcessor::loadParameters() {
   return true;
 }
 
+/**
+ * @brief 视觉前端初始化，从ROS的参数服务器中读取相关参数以及创建ros发布和订阅的主题
+ *
+ * 载入参数服务器中的相关参数
+ * 创建ros发布和订阅的主题
+ */
+    bool ImageProcessor::initialize() {
+      if (!loadParameters()) return false;
+      ROS_INFO("Finish loading ROS parameters...");
+
+      // Create feature detector.
+      detector_ptr = FastFeatureDetector::create(
+              processor_config.fast_threshold);
+
+      if (!createRosIO()) return false;
+      ROS_INFO("Finish creating ROS IO...");
+
+      return true;
+    }
+
+/**
+ * @brief 创建ros发布和订阅的主题
+ *
+ * 发布节点：相机的特征量测和跟踪信息
+ * 订阅节点：两个相机的图像以及imu
+ */
 bool ImageProcessor::createRosIO() {
   feature_pub = nh.advertise<CameraMeasurement>(
       "features", 3);
@@ -192,20 +227,10 @@ bool ImageProcessor::createRosIO() {
   return true;
 }
 
-bool ImageProcessor::initialize() {
-  if (!loadParameters()) return false;
-  ROS_INFO("Finish loading ROS parameters...");
-
-  // Create feature detector.
-  detector_ptr = FastFeatureDetector::create(
-      processor_config.fast_threshold);
-
-  if (!createRosIO()) return false;
-  ROS_INFO("Finish creating ROS IO...");
-
-  return true;
-}
-
+/**
+ * @brief 将imu的消息类型保存在缓冲中
+ *
+ */
 void ImageProcessor::stereoCallback(
     const sensor_msgs::ImageConstPtr& cam0_img,
     const sensor_msgs::ImageConstPtr& cam1_img) {
@@ -213,6 +238,7 @@ void ImageProcessor::stereoCallback(
   //cout << "==================================" << endl;
 
   // Get the current image.
+  // 两个图像消息类型指针
   cam0_curr_img_ptr = cv_bridge::toCvShare(cam0_img,
       sensor_msgs::image_encodings::MONO8);
   cam1_curr_img_ptr = cv_bridge::toCvShare(cam1_img,
@@ -222,6 +248,7 @@ void ImageProcessor::stereoCallback(
   createImagePyramids();
 
   // Detect features in the first frame.
+  // 第一帧图像则
   if (is_first_img) {
     ros::Time start_time = ros::Time::now();
     initializeFirstFrame();
@@ -234,7 +261,8 @@ void ImageProcessor::stereoCallback(
     drawFeaturesStereo();
     //ROS_INFO("Draw features: %f",
     //    (ros::Time::now()-start_time).toSec());
-  } else {
+  }
+  else {
     // Track the feature in the previous image.
     ros::Time start_time = ros::Time::now();
     trackFeatures();
@@ -286,16 +314,30 @@ void ImageProcessor::stereoCallback(
   return;
 }
 
+/**
+ * @brief 将imu的消息类型保存在缓冲中
+ *
+ */
 void ImageProcessor::imuCallback(
     const sensor_msgs::ImuConstPtr& msg) {
   // Wait for the first image to be set.
+  // 第一帧图像设置后再对imu做保存
   if (is_first_img) return;
+  // 保存imu的消息类型
   imu_msg_buffer.push_back(*msg);
   return;
 }
 
+/**
+ * @brief 创建图像金字塔
+ *
+ * 调用了OpenCV的函数buildOpticalFlowPyramid构建图像金字塔
+ */
 void ImageProcessor::createImagePyramids() {
   const Mat& curr_cam0_img = cam0_curr_img_ptr->image;
+
+  // OpenCV的函数
+  // Constructs the image pyramid which can be passed to calcOpticalFlowPyrLK.
   buildOpticalFlowPyramid(
       curr_cam0_img, curr_cam0_pyramid_,
       Size(processor_config.patch_size, processor_config.patch_size),
@@ -310,6 +352,12 @@ void ImageProcessor::createImagePyramids() {
       BORDER_CONSTANT, false);
 }
 
+/**
+ * @brief 第一帧图像初始化
+ * 提取fast关键点，用光流进行跟踪匹配关键点对（klt）
+ *
+ *
+ */
 void ImageProcessor::initializeFirstFrame() {
   // Size of each grid.
   const Mat& img = cam0_curr_img_ptr->image;
@@ -317,19 +365,23 @@ void ImageProcessor::initializeFirstFrame() {
   static int grid_width = img.cols / processor_config.grid_col;
 
   // Detect new features on the frist image.
+  // 提取FAST关键点
   vector<KeyPoint> new_features(0);
   detector_ptr->detect(img, new_features);
 
   // Find the stereo matched points for the newly
   // detected features.
+  // FAST关键点位于图像的像素坐标位置
   vector<cv::Point2f> cam0_points(new_features.size());
   for (int i = 0; i < new_features.size(); ++i)
     cam0_points[i] = new_features[i].pt;
 
+  // 光流跟踪匹配两帧的关键点
   vector<cv::Point2f> cam1_points(0);
   vector<unsigned char> inlier_markers(0);
   stereoMatch(cam0_points, cam1_points, inlier_markers);
 
+  // 保存符合要求的内点以及响应强度
   vector<cv::Point2f> cam0_inliers(0);
   vector<cv::Point2f> cam1_inliers(0);
   vector<float> response_inliers(0);
@@ -341,6 +393,7 @@ void ImageProcessor::initializeFirstFrame() {
   }
 
   // Group the features into grids
+  // 图像画格子，使得特征点的分布更加均匀
   GridFeatures grid_new_features;
   for (int code = 0; code <
       processor_config.grid_row*processor_config.grid_col; ++code)
@@ -606,6 +659,13 @@ void ImageProcessor::trackFeatures() {
   return;
 }
 
+/**
+ * @brief 对两帧图像对做特征匹配，对极几何约束剔除外点
+ * @param cam0_points：第一帧图像帧的关键点位置
+ * @return cam1_points:第二帧图像中的关键点位置
+ * @return inlier_markers:匹配成功返回1，否则为0
+ *
+ */
 void ImageProcessor::stereoMatch(
     const vector<cv::Point2f>& cam0_points,
     vector<cv::Point2f>& cam1_points,
@@ -613,19 +673,27 @@ void ImageProcessor::stereoMatch(
 
   if (cam0_points.size() == 0) return;
 
+  // 对第二帧图像中的特征点位置初始化
   if(cam1_points.size() == 0) {
     // Initialize cam1_points by projecting cam0_points to cam1 using the
     // rotation from stereo extrinsics
     const cv::Matx33d R_cam0_cam1 = R_cam1_imu.t() * R_cam0_imu;
     vector<cv::Point2f> cam0_points_undistorted;
+
+    // 第一个摄像头图像中的关键点位置矫正
     undistortPoints(cam0_points, cam0_intrinsics, cam0_distortion_model,
                     cam0_distortion_coeffs, cam0_points_undistorted,
                     R_cam0_cam1);
+    // 第二个摄像头中的关键点位置
     cam1_points = distortPoints(cam0_points_undistorted, cam1_intrinsics,
                                 cam1_distortion_model, cam1_distortion_coeffs);
   }
 
   // Track features using LK optical flow method.
+  // 采用LK光流跟踪关键点
+  // 输入两个相机图像对应的金字塔以及第一个相机图像对应的关键点cam0_points
+  // 输出光流跟踪到的第二个相机图像对应的关键点cam1_points
+  // inlier_markers表示cam0_points中的点是否有对应的点
   calcOpticalFlowPyrLK(curr_cam0_pyramid_, curr_cam1_pyramid_,
       cam0_points, cam1_points,
       inlier_markers, noArray(),
@@ -638,6 +706,7 @@ void ImageProcessor::stereoMatch(
 
   // Mark those tracked points out of the image region
   // as untracked.
+  // 光流跟踪得到的点超过图像区域就标志为未跟踪的点
   for (int i = 0; i < cam1_points.size(); ++i) {
     if (inlier_markers[i] == 0) continue;
     if (cam1_points[i].y < 0 ||
@@ -652,6 +721,7 @@ void ImageProcessor::stereoMatch(
   const cv::Matx33d R_cam0_cam1 = R_cam1_imu.t() * R_cam0_imu;
   const cv::Vec3d t_cam0_cam1 = R_cam1_imu.t() * (t_cam0_imu-t_cam1_imu);
   // Compute the essential matrix.
+  // 本质矩阵的计算公式：[t]x * R（见多视图几何）
   const cv::Matx33d t_cam0_cam1_hat(
       0.0, -t_cam0_cam1[2], t_cam0_cam1[1],
       t_cam0_cam1[2], 0.0, -t_cam0_cam1[0],
@@ -660,6 +730,9 @@ void ImageProcessor::stereoMatch(
 
   // Further remove outliers based on the known
   // essential matrix.
+  // 所有的匹配点应满足对极几何约束，不满足该条件就剔除
+
+  // 图像点先去畸变
   vector<cv::Point2f> cam0_points_undistorted(0);
   vector<cv::Point2f> cam1_points_undistorted(0);
   undistortPoints(
@@ -669,20 +742,27 @@ void ImageProcessor::stereoMatch(
       cam1_points, cam1_intrinsics, cam1_distortion_model,
       cam1_distortion_coeffs, cam1_points_undistorted);
 
+  // 将两个相机的fx和fy取平均
   double norm_pixel_unit = 4.0 / (
       cam0_intrinsics[0]+cam0_intrinsics[1]+
       cam1_intrinsics[0]+cam1_intrinsics[1]);
 
+  // 剔除明显不符合对极几何的点
   for (int i = 0; i < cam0_points_undistorted.size(); ++i) {
     if (inlier_markers[i] == 0) continue;
+    // 齐次坐标
     cv::Vec3d pt0(cam0_points_undistorted[i].x,
         cam0_points_undistorted[i].y, 1.0);
     cv::Vec3d pt1(cam1_points_undistorted[i].x,
         cam1_points_undistorted[i].y, 1.0);
+    // 根据本质矩阵得到极线
+    // 极线计算公式：l' = F*x = (a,b,c)^t
     cv::Vec3d epipolar_line = E * pt0;
+    // 第二个相机中的匹配点到极线的距离(l' = ax+by+c)
     double error = fabs((pt1.t() * epipolar_line)[0]) / sqrt(
         epipolar_line[0]*epipolar_line[0]+
         epipolar_line[1]*epipolar_line[1]);
+    // 距离小于阈值就认为是外点，剔除
     if (error > processor_config.stereo_threshold*norm_pixel_unit)
       inlier_markers[i] = 0;
   }
@@ -847,6 +927,17 @@ void ImageProcessor::pruneGridFeatures() {
   return;
 }
 
+/**
+ * @brief 计算原图像帧关键点对应的矫正位置
+ * @param pts_in：原图像帧的关键点位置
+ * @param intrinsics:内参矩阵
+ * @param distortion_model：相机模型
+ * @param distortion_coeffs:畸变系数
+ * @return pts_out:畸变矫正后的关键点位置
+ * @param rectification_matrix:矫正矩阵，即两个相机之间的外参数
+ * @param new_intrinsics:新的内参矩阵,默认值
+ *
+ */
 void ImageProcessor::undistortPoints(
     const vector<cv::Point2f>& pts_in,
     const cv::Vec4d& intrinsics,
@@ -868,6 +959,8 @@ void ImageProcessor::undistortPoints(
       0.0, new_intrinsics[1], new_intrinsics[3],
       0.0, 0.0, 1.0);
 
+  // 畸变模型选择，一般为radtan
+  // 将原图像中的关键点转换为未畸变的关键点
   if (distortion_model == "radtan") {
     cv::undistortPoints(pts_in, pts_out, K, distortion_coeffs,
                         rectification_matrix, K_new);
@@ -884,6 +977,15 @@ void ImageProcessor::undistortPoints(
   return;
 }
 
+/**
+ * @brief 计算原图像帧关键点对应的矫正位置
+ * @param pts_in：图像帧中已校正的关键点位置
+ * @param intrinsics:内参矩阵
+ * @param distortion_model：相机模型
+ * @param distortion_coeffs:畸变系数
+ * @return pts_out:投影得到的图像点位置
+ *
+ */
 vector<cv::Point2f> ImageProcessor::distortPoints(
     const vector<cv::Point2f>& pts_in,
     const cv::Vec4d& intrinsics,
@@ -896,8 +998,11 @@ vector<cv::Point2f> ImageProcessor::distortPoints(
 
   vector<cv::Point2f> pts_out;
   if (distortion_model == "radtan") {
+    // 针孔模型
     vector<cv::Point3f> homogenous_pts;
+    // 将图像坐标（u,v）转换为齐次坐标(u,v,1)
     cv::convertPointsToHomogeneous(pts_in, homogenous_pts);
+    // ?
     cv::projectPoints(homogenous_pts, cv::Vec3d::zeros(), cv::Vec3d::zeros(), K,
                       distortion_coeffs, pts_out);
   } else if (distortion_model == "equidistant") {

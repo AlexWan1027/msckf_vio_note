@@ -221,7 +221,7 @@ bool MsckfVio::createRosIO() {
 }
 
 /**
- * @brief 系统初始化，从launch文件从读入相关参数以及创建ros发布和订阅的主题
+ * @brief MSCKF初始化，从launch文件从读入相关参数以及创建ros发布和订阅的主题
  *
  * 载入launch文件中相关参数
  * 初始化状态噪声的偏置
