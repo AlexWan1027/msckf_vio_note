@@ -1332,6 +1332,7 @@ void ImageProcessor::twoPointRansac(
     coeff_l1_norm[0] = coeff_tx.lpNorm<1>();
     coeff_l1_norm[1] = coeff_ty.lpNorm<1>();
     coeff_l1_norm[2] = coeff_tz.lpNorm<1>();
+    // min_element： 返回容器中最小值
     int base_indicator = min_element(coeff_l1_norm.begin(),
         coeff_l1_norm.end())-coeff_l1_norm.begin();
 

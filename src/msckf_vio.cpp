@@ -686,7 +686,10 @@ void MsckfVio::processModel(const double& time,
   predictNewState(dtime, gyro, acc);
 
   // Modify the transition matrix
-  // ?
+  // 原理详见论文《observability-constrained vision-aided inertial navigation》
+  // 可观测性约束，在协方差传递步骤需满足，N(k+1) = Φ(k)*N(k),其中N为可观测性矩阵的右零空间
+  // 根据相关公式展开可得Au=w的表达式，构造一个最小二乘形式----》目标函数：min|A*-A|  条件：（A*）u=w
+  // 拉格朗日乘子法可得:A* = A-(Au-w)(u^T u)^-1 u^T  这个A*包含了加可观测性约束后，Φ中的部分改变的元素。
   Matrix3d R_kk_1 = quaternionToRotation(imu_state.orientation_null);
   Phi.block<3, 3>(0, 0) =
     quaternionToRotation(imu_state.orientation) * R_kk_1.transpose();
