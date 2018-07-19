@@ -712,7 +712,7 @@ void MsckfVio::processModel(const double& time,
   // Imu噪声协方差矩阵Q为state_server.continuous_noise_cov（动态系统）
   // 连续时间下状态转移矩阵的噪声协方差阵： Qk = 积分（Φ G Q G^T Φ^T dt） （状态转移方程）
   // 离散化噪声协方差: Qk = Φ G Q G^T Φ^T dt
-  // 卡尔曼滤波器的均方误差为 state_server.state_cov = Φ P Φ^T + Qk
+  // IMU的协方差计算P(II) 为 state_server.state_cov = Φ P Φ^T + Qk
   Matrix<double, 21, 21> Q = Phi*G*state_server.continuous_noise_cov*
     G.transpose()*Phi.transpose()*dtime;
   state_server.state_cov.block<21, 21>(0, 0) =
@@ -727,7 +727,7 @@ void MsckfVio::processModel(const double& time,
   // P_k_k  = [                           ]
   //          [ P_I_C(k|k).T * Φ.T  P_C_C(k|k)]
   if (state_server.cam_states.size() > 0) {
-    // ?
+    // 相机与imu之间的协方差计算P(IC)
     state_server.state_cov.block(
         0, 21, 21, state_server.state_cov.cols()-21) =
       Phi * state_server.state_cov.block(
@@ -738,7 +738,7 @@ void MsckfVio::processModel(const double& time,
         21, 0, state_server.state_cov.rows()-21, 21) * Phi.transpose();
   }
 
-  // ?
+  // 为了保证数值的稳定性，进行半正定处理：P(ij) = P(ji)
   MatrixXd state_cov_fixed = (state_server.state_cov +
       state_server.state_cov.transpose()) / 2.0;
   state_server.state_cov = state_cov_fixed;
