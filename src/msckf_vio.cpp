@@ -1032,6 +1032,9 @@ void MsckfVio::measurementJacobian(
   // Modifty the measurement Jacobian to ensure
   // observability constrain.
   // 可观测性约束，见论文《Observability-constrained vision-aided inertial navigation》
+  // 这里的约束是更新阶段的约束，其条件为：Au=0
+  // 上面的协方差传递步骤的约束已经推到了如何通过最小二乘求解加可观测性约束后的状态转移矩阵的改变
+  // 这里直接给结论：A* = A-A*u*(u^T u)^-1 u^T
   Matrix<double, 4, 6> A = H_x;
   Matrix<double, 6, 1> u = Matrix<double, 6, 1>::Zero();
   u.block<3, 1>(0, 0) = quaternionToRotation(
